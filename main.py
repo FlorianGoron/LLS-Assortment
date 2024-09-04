@@ -293,7 +293,7 @@ st.sidebar.markdown("<h4 style='font-size:16px;'>Weight of KPIs</h4>", unsafe_al
 
 # Start by defining lambda1
 lambda1 = st.sidebar.slider("λ1 (%)", min_value=0.0, max_value=100.0, value=33.0, step=0.1)
-
+ 
 # The other two are calculated proportionally so that their sum with lambda1 is 100
 if lambda1 < 100.0:
     lambda2 = st.sidebar.slider("λ2 (%)", min_value=0.0, max_value=100.0 - lambda1, value=(100.0 - lambda1) / 2, step=0.1)
