@@ -214,15 +214,17 @@ def optimize_warehouse(articles, orders, max_articles=15, selected_stores=['Stor
     # Solve the problem
     model.solve(PULP_CBC_CMD(msg=False))
 
-    # Calculate KPIs in percentage
-    kpi1_count = value(KPI_1)
-    kpi2_count = value(KPI_2)
-    kpi3_count = value(KPI_3)
-    kpi1_percentage = (kpi1_count / total_orders) * 100 if total_orders > 0 else 0
-    kpi2_percentage = (kpi2_count / total_agabaritic_orders) * 100 if total_agabaritic_orders > 0 else 0
-
     # Optimal articles to store
     optimal_articles = [article['cod_art'] for article in articles if value(x[article['cod_art']]) == 1]
+
+    # Calculate KPIs
+    res = calculate_kpis(selected_articles=optimal_articles, articles=articles, orders=orders, selected_stores=selected_stores)
+    kpi1_count = res['kpi1_count']
+    kpi2_count = res['kpi2_count']
+    kpi3_count = res['kpi3_count']
+    kpi1_percentage = res['kpi1_percentage']
+    kpi2_percentage = res['kpi2_percentage']
+
 
     # Total used volume
     used_volume = lpSum(x[article['cod_art']].varValue * article['size_art'] for article in articles).value()
@@ -230,7 +232,7 @@ def optimize_warehouse(articles, orders, max_articles=15, selected_stores=['Stor
     # Total volume of shipped orders
     shipped_orders_volume = sum(
         sum(article['size_art'] for article_id in order['articles'] for article in articles if article['cod_art'] == article_id)
-        for order in orders if value(z[order['id']]) == 1
+        for order in orders if value(y[order['id']]) == 1
     )
 
     # End execution
@@ -365,21 +367,43 @@ for i, sim in enumerate(st.session_state.simulations):
     # Example of a graph to display for each simulation
     optimal_articles = sim['optimal_articles']
     kpi1_percentage = []
+    kpi2_percentage = []
+    kpi3_count = []
+    kpi2_count = []
     selected_articles = []
     for article in optimal_articles:
         selected_articles.append(article)
         results = calculate_kpis(selected_articles, articles, commandes, selected_stores=sim['selected_stores'])
         kpi1_percentage.append(results['kpi1_percentage'])
+        kpi2_percentage.append(results['kpi2_percentage'])
+        kpi2_count.append(results['kpi2_count'])
+        kpi3_count.append(results['kpi3_count'])
 
     cumulative_articles = list(range(1, len(optimal_articles) + 1))
 
     plt.figure(figsize=(10, 6))
-    plt.plot(cumulative_articles, kpi1_percentage, marker='o', linestyle='-', color='b', label='KPI 1')
-    plt.title("Evolution of KPI 1 based on the number of stored articles")
+
+    # Tracer KPI 1 et KPI 2 sur l'axe de gauche
+    line1, = plt.plot(cumulative_articles, kpi1_percentage, marker='o', linestyle='-', color='b', label='KPI 1')
+    line2, = plt.plot(cumulative_articles, kpi2_percentage, marker='x', linestyle='-', color='g', label='KPI 2')
     plt.xlabel("Number of stored articles")
-    plt.ylabel("KPI 1 (%)")
+    plt.ylabel("KPI 1 (%) / KPI 2 (%)")
+
+    # Tracer KPI 3 sur l'axe de droite
+    ax2 = plt.gca().twinx()
+    line3, = ax2.plot(cumulative_articles, kpi3_count, marker='s', linestyle='--', color='r', label='KPI 3')
+    ax2.set_ylabel("KPI 3 (Count)")
+
+    plt.title("Evolution of KPIs based on the number of stored articles")
     plt.grid(True)
-    plt.legend()
+
+    # Définir les limites de l'axe y pour correspondre aux données combinées de KPI 1 et KPI 2
+    plt.ylim(min(min(kpi1_percentage), min(kpi2_percentage)) - 5, max(max(kpi1_percentage), max(kpi2_percentage)) + 5)
+
+    # Combiner les lignes et les étiquettes des deux axes pour une seule légende
+    lines = [line1, line2, line3]
+    labels = [line.get_label() for line in lines]
+    plt.legend(lines, labels, loc='upper left')
 
     st.pyplot(plt)
 
