@@ -149,6 +149,13 @@ def optimize_warehouse(articles, orders, max_articles=15, selected_stores=['Stor
     """
     # Start execution
     start_time = time.time()
+
+    # If selected_stores is None or empty, take all orders
+    if selected_stores is None or len(selected_stores) == 0:
+        orders = orders
+    else:
+        # Filter orders based on selected stores
+        orders = [order for order in orders if order['magasin'] in selected_stores]
     
     # Create the problem model
     model = LpProblem(name="stock-optimization", sense=LpMaximize)
