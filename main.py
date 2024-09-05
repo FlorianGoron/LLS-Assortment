@@ -269,11 +269,13 @@ st.title("LLS - Assortment, KPI values")
 
 st.subheader("Objective")
 # Description of the objective
-st.markdown("""
-            
+
+st.markdown(r"""         
 We aim to find the list of articles that maximizes the following sum:
           
->              Maximize λ1⋅KPI 1 + λ2⋅KPI 2 + λ3⋅KPI 3 
+$$
+\text{Maximize} \quad \lambda_1 \cdot \text{KPI}_1 + \lambda_2 \cdot \text{KPI}_2 + \lambda_3 \cdot \text{KPI}_3
+$$
 
 Under the constraint of the maximum number of articles that the LLS can hold
             
@@ -355,12 +357,12 @@ st.subheader("Simulation Results")
 for i, sim in enumerate(st.session_state.simulations):
     st.write(f"**Simulation {i+1} :** λ1={sim['lambda_1']:.2f}, λ2={sim['lambda_2']:.2f}, λ3={sim['lambda_3']:.2f}, "
              f"Number of articles = {sim['number_of_articles']}, Linked stores = {', '.join(sim['selected_stores'])}")
-    st.write(f"The articles to be stored in the LLS to optimize the KPIs are: {sim['optimal_articles']}")
-    st.write(f"{sim['kpi1_count']:.0f} orders sourced from the LLS are complete, approximately "
-             f"{sim['kpi1_percentage']:.0f}% of total orders")
-    st.write(f"{sim['kpi2_count']:.0f} agabaritic orders are shipped from the LLS, approximately "
-             f"{sim['kpi2_percentage']:.0f}% of agabaritic orders")
-    st.write(f"{sim['kpi3_count']:.0f} orders have been prepared on the LLS")
+    st.write(f"The articles to be stored in the LLS to optimize the KPIs are: **{sim['optimal_articles']}**")
+    st.write(f"**{sim['kpi1_count']:.0f} orders** sourced from the LLS are complete, approximately "
+             f"**{sim['kpi1_percentage']:.0f}% of total orders**")
+    st.write(f"**{sim['kpi2_count']:.0f} agabaritic orders** are shipped from the LLS, approximately "
+             f"**{sim['kpi2_percentage']:.0f}% of agabaritic orders**")
+    st.write(f"**{sim['kpi3_count']:.0f} orders** have been prepared on the LLS")
     st.write(f"Total volume used in the LLS: {sim['used_volume']} m3")
     st.write(f"Total volume shipped from the LLS: {sim['shipped_orders_volume']} m3")
 
