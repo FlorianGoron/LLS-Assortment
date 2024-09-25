@@ -1,6 +1,7 @@
 import streamlit as st
 import matplotlib.pyplot as plt
-from pulp import LpMaximize, LpProblem, LpVariable, lpSum, value, PULP_CBC_CMD
+#from pulp import LpMaximize, LpProblem, LpVariable, lpSum, value, PULP_CBC_CMD
+from ortools.linear_solver import pywraplp
 import time
 
 # Example data
@@ -55,7 +56,7 @@ commandes = [
     {'id': 30, 'articles': [14, 11], "tag_agabaritic_order": 0, 'magasin': 'Store 3'}
 ]
 
-def calculate_kpis(selected_articles, articles, orders, selected_stores=None):
+def calculate_kpis_lmpl(selected_articles, articles, orders, selected_stores=None):
     """
     Calculate the KPIs for a given list of selected articles and selected stores.
 
@@ -130,15 +131,85 @@ def calculate_kpis(selected_articles, articles, orders, selected_stores=None):
         'kpi3_percentage': kpi3_percentage
     }
 
-
-def optimize_warehouse(articles, orders, max_articles=15, selected_stores=['Store 1', 'Store 2', 'Store 3'], lambda_1=1/3, lambda_2=1/3, lambda_3=1/3):
+def calculate_kpis_obes(selected_articles, articles, orders, selected_stores=None, lambda_1=1/3, lambda_2=1/3, lambda_3=1/3):
     """
-    Optimize the storage of articles in the warehouse to maximize KPIs.
+    Calculate the KPIs for a given list of selected articles and selected stores, and return the objective function value.
+
+    Parameters:
+    selected_articles (list): List of selected article codes.
+    articles (list): Complete list of articles with their codes and sizes.
+    orders (list): List of orders with associated articles and 'agabaritic' tag.
+    selected_stores (list, optional): List of stores to include in the calculation. Takes all orders if None or empty.
+    lambda_1 (float): Weight for KPI1 in the objective function.
+    lambda_2 (float): Weight for KPI2 in the objective function.
+    lambda_3 (float): Weight for KPI3 in the objective function.
+
+    Returns:
+    dict: A dictionary with KPI1, KPI2, KPI3 values and the value of the objective function.
+    """
+    
+    # If selected_stores is None or empty, take all orders
+    if selected_stores is None or len(selected_stores) == 0:
+        filtered_orders = orders
+    else:
+        # Filter orders based on selected stores
+        filtered_orders = [order for order in orders if order['magasin'] in selected_stores]
+
+    # Index articles by article code for quick access to their sizes
+    articles_dict = {article['cod_art']: article for article in articles}
+
+    # Initialize KPI counters
+    kpi1_count = 0
+    kpi2_count = 0
+    kpi3_count = 0
+
+    for order in filtered_orders:
+        order_articles = order['articles']
+        
+        # Check if all articles in the order are in the list of selected articles (KPI1)
+        if all(article_id in selected_articles for article_id in order_articles):
+            kpi1_count += 1
+
+        # Check if at least one article of the order is in the selected articles (KPI2 and KPI3)
+        if any(article_id in selected_articles for article_id in order_articles):
+            # For KPI 2: Check if the order is agabaritic and has at least one article in the warehouse
+            if order['tag_agabaritic_order'] == 1:
+                kpi2_count += 1
+
+            # For KPI 3: At least one article of any order is sourced in the warehouse
+            kpi3_count += 1
+
+    # Calculate KPI percentages
+    total_orders = len(filtered_orders)
+    total_agabaritic_orders = sum(order['tag_agabaritic_order'] for order in filtered_orders)
+
+    kpi1_percentage = (kpi1_count / total_orders) * 100 if total_orders > 0 else 0
+    kpi2_percentage = (kpi2_count / total_agabaritic_orders) * 100 if total_agabaritic_orders > 0 else 0
+    kpi3_percentage = (kpi3_count / total_orders) * 100 if total_orders > 0 else 0
+
+    # Calculate the objective function value (normalized between 0 and 100)
+    objective_value = (lambda_1 * kpi1_percentage + lambda_2 * kpi2_percentage + lambda_3 * kpi3_percentage)
+
+    return {
+        'kpi1_count': kpi1_count,
+        'kpi2_count': kpi2_count,
+        'kpi3_count': kpi3_count,
+        'kpi1_percentage': kpi1_percentage,
+        'kpi2_percentage': kpi2_percentage,
+        'kpi3_percentage': kpi3_percentage,
+        'objective_value': objective_value  # Add the objective function value to the output
+    }
+
+
+def optimize_warehouse_ortools_obes(articles, orders, max_articles=15, fixed_articles=[], selected_stores=['Store 1', 'Store 2', 'Store 3'], lambda_1=1/3, lambda_2=1/3, lambda_3=1/3):
+    """
+    Optimize the storage of articles in the warehouse to maximize KPIs using OR-Tools.
 
     Parameters:
     articles (list): List of articles with their codes and sizes.
     orders (list): List of orders with associated articles and the 'agabaritic' tag.
     max_articles (int, optional): Maximum number of articles the warehouse can hold. If None, no constraint on the number of articles.
+    fixed_articles (list): List of fixed articles that are already in the warehouse and cannot be removed.
     selected_stores (list, optional): List of stores selected by the user. If None, all stores are considered.
     lambda_1 (float, optional): Weight coefficient for KPI_1. Default is 1/3.
     lambda_2 (float, optional): Weight coefficient for KPI_2. Default is 1/3.
@@ -157,107 +228,120 @@ def optimize_warehouse(articles, orders, max_articles=15, selected_stores=['Stor
         # Filter orders based on selected stores
         orders = [order for order in orders if order['magasin'] in selected_stores]
     
-    # Create the problem model
-    model = LpProblem(name="stock-optimization", sense=LpMaximize)
+    # Create the solver
+    solver = pywraplp.Solver.CreateSolver('CBC')
+    
+    if not solver:
+        return None
 
-    # Decision variables for articles
-    x = {article['cod_art']: LpVariable(name=f"x_{article['cod_art']}", cat='Binary') for article in articles}
+    # Decision variables for articles (only for those not in fixed_articles)
+    x = {article['cod_art']: solver.BoolVar(f"x_{article['cod_art']}") for article in articles if article['cod_art'] not in fixed_articles}
 
     # Decision variables for KPI_1 (if all articles in the order are in the warehouse)
-    y = {order['id']: LpVariable(name=f"y_{order['id']}", cat='Binary') for order in orders}
+    y = {order['id']: solver.BoolVar(f"y_{order['id']}") for order in orders}
 
-    # Decision variables for KPI_2 (if more than 50% of the volume of the AGABARITIC order is covered by the warehouse)
-    z_agabaritic = {order['id']: LpVariable(name=f"z_agabaritic_{order['id']}", cat='Binary') for order in orders}
-
-    # Decision variables for KPI_3 (if more than 50% of the volume of the order is covered by the warehouse)
-    z = {order['id']: LpVariable(name=f"z_{order['id']}", cat='Binary') for order in orders}
+    # New decision variables for KPI_2 and KPI_3 (if at least one article in the order is in the warehouse)
+    z_agabaritic = {order['id']: solver.BoolVar(f"z_agabaritic_{order['id']}") for order in orders}
+    z = {order['id']: solver.BoolVar(f"z_{order['id']}") for order in orders}
 
     # Constraint for KPI_1: y_i can only be 1 if all articles in order i are in the warehouse
     for order in orders:
         for article_id in order['articles']:
-            model += (y[order['id']] <= x[article_id], f"constr_y_{order['id']}_{article_id}")
+            if article_id in fixed_articles:
+                solver.Add(y[order['id']] <= 1)  # Fixed article, always available
+            else:
+                solver.Add(y[order['id']] <= x[article_id])
 
-    # Constraints for KPI_2 and KPI_3
+    # New constraints for KPI_2 and KPI_3
     for order in orders:
-        total_volume = sum(next(article['size_art'] for article in articles if article['cod_art'] == article_id) for article_id in order['articles'])
-        warehouse_volume = lpSum(x[article_id] * next(article['size_art'] for article in articles if article['cod_art'] == article_id) for article_id in order['articles'])
+        # At least one product must be sourced in the warehouse for both KPIs
+        order_articles_in_warehouse = solver.Sum((x[article_id] if article_id not in fixed_articles else 1) for article_id in order['articles'])
         
-        # Constraint for KPI_2: The order must be AGABARITIC and the warehouse volume must cover at least 50% of the total order volume
+        # For KPI_2: The order must be agabaritic and at least one article must be sourced in the warehouse
         if order['tag_agabaritic_order'] == 1:
-            model += (warehouse_volume >= 0.5 * total_volume * z_agabaritic[order['id']], f"constr_z_agabaritic_{order['id']}")
-            
-        # Constraint for KPI_3: Check if more than 50% of the order volume is covered by the warehouse (all orders)
-        model += (warehouse_volume >= 0.5 * total_volume * z[order['id']], f"constr_z_{order['id']}")
+            solver.Add(order_articles_in_warehouse >= 1 * z_agabaritic[order['id']])
+        
+        # For KPI_3: At least one article must be sourced in the warehouse for all orders
+        solver.Add(order_articles_in_warehouse >= 1 * z[order['id']])
 
-    # Objective function: Maximizing KPI_1, KPI_2, and KPI_3 with specified weights
-    # Total number of orders
+    # Objective function: Maximizing normalized KPI_1, KPI_2, and KPI_3
     total_orders = len(orders)
-
-    # Total number of AGABARITIC orders
     total_agabaritic_orders = sum(order['tag_agabaritic_order'] for order in orders)
 
-    # KPI_1: Total number of orders where all articles come from the warehouse (LLS)
-    KPI_1 = lpSum(y[order['id']] for order in orders)
+    # Normalize each KPI
+    KPI_1 = solver.Sum(y[order['id']] for order in orders) / total_orders  # Normalized KPI_1
+    KPI_2 = solver.Sum(z_agabaritic[order['id']] for order in orders if order['tag_agabaritic_order'] == 1) / total_agabaritic_orders  # Normalized KPI_2
+    KPI_3 = solver.Sum(z[order['id']] for order in orders) / total_orders  # Normalized KPI_3
 
-    # KPI_2: Total number of "AGABARITIC" orders where the volume of articles from the warehouse represents more than 50% of the total volume
-    KPI_2 = lpSum(z_agabaritic[order['id']] for order in orders if order['tag_agabaritic_order'] == 1)
+    # Objective: Maximize the weighted sum of normalized KPIs, scaled to 100
+    solver.Maximize(lambda_1 * KPI_1 + lambda_2 * KPI_2 + lambda_3 * KPI_3)
 
-    # KPI_3: Total number of orders where the volume of articles from the warehouse represents more than 50% of the total order volume
-    KPI_3 = lpSum(z[order['id']] for order in orders)
-
-    # Add the objective function with weighting
-    model += lambda_1 * KPI_1 + lambda_2 * KPI_2 + lambda_3 * KPI_3
-
-    # Constraint: Total number of articles in the warehouse must not exceed max_articles
-    model += lpSum(x[article['cod_art']] for article in articles) <= max_articles
+    # Constraint: Total number of articles in the warehouse must not exceed max_articles (including fixed_articles)
+    solver.Add(solver.Sum(x[article['cod_art']] for article in articles if article['cod_art'] not in fixed_articles) + len(fixed_articles) <= max_articles)
 
     # Solve the problem
-    model.solve(PULP_CBC_CMD(msg=False))
+    status = solver.Solve()
 
-    # Optimal articles to store
-    optimal_articles = [article['cod_art'] for article in articles if value(x[article['cod_art']]) == 1]
+    if status == pywraplp.Solver.OPTIMAL:
+        # Optimal articles to store: selected articles (excluding fixed articles)
+        selected_articles = [article['cod_art'] for article in articles if article['cod_art'] not in fixed_articles and x[article['cod_art']].solution_value() == 1]
+        optimal_articles = fixed_articles + selected_articles  # Combine fixed and selected
 
-    # Calculate KPIs
-    res = calculate_kpis(selected_articles=optimal_articles, articles=articles, orders=orders, selected_stores=selected_stores)
-    kpi1_count = res['kpi1_count']
-    kpi2_count = res['kpi2_count']
-    kpi3_count = res['kpi3_count']
-    kpi1_percentage = res['kpi1_percentage']
-    kpi2_percentage = res['kpi2_percentage']
+        # Adjust list if it exceeds max_articles
+        if len(optimal_articles) > max_articles:
+            optimal_articles = fixed_articles + selected_articles[:max_articles - len(fixed_articles)]
 
+        res = calculate_kpis_obes(selected_articles=optimal_articles, 
+                                  articles=articles, 
+                                  orders=orders, 
+                                  selected_stores=selected_stores, 
+                                  lambda_1=lambda_1, 
+                                  lambda_2=lambda_2, 
+                                  lambda_3=lambda_3)
+        kpi1_count = res['kpi1_count']
+        kpi2_count = res['kpi2_count']
+        kpi3_count = res['kpi3_count']
+        kpi1_percentage = res['kpi1_percentage']
+        kpi2_percentage = res['kpi2_percentage']
+        kpi3_percentage = res['kpi3_percentage']
 
-    # Total used volume
-    used_volume = lpSum(x[article['cod_art']].varValue * article['size_art'] for article in articles).value()
-
-    # Total volume of shipped orders
-    shipped_orders_volume = sum(
-        sum(article['size_art'] for article_id in order['articles'] for article in articles if article['cod_art'] == article_id)
-        for order in orders if value(y[order['id']]) == 1
-    )
-
-    # End execution
-    end_time = time.time()
+        # Calculate used volume
+        used_volume = sum(article['size_art'] for article in articles if article['cod_art'] in optimal_articles)
         
-    # Execution duration
-    execution_time = end_time - start_time
-    print(f"Algorithm execution time: {execution_time:.4f} seconds")
-    
-    # Results
-    return {
-        'optimal_articles': optimal_articles,
-        'kpi1_count': kpi1_count,
-        'kpi2_count': kpi2_count,
-        'kpi3_count': kpi3_count,
-        'kpi1_percentage': kpi1_percentage,
-        'kpi2_percentage': kpi2_percentage,
-        'used_volume': used_volume, 
-        'shipped_orders_volume': shipped_orders_volume,
-        'lambda_1': lambda_1, 
-        'lambda_2': lambda_2,
-        'lambda_3': lambda_3,
-        'selected_stores': selected_stores,
-        'number_of_articles': max_articles,
-    }
+        # Calculate shipped_orders_volume
+        shipped_orders_volume = sum(
+            sum(article['size_art'] for article_id in order['articles'] for article in articles if article['cod_art'] == article_id)
+            for order in orders if y[order['id']].solution_value() == 1
+        )
+
+        # End execution
+        end_time = time.time()
+        
+        # Execution duration
+        execution_time = end_time - start_time
+        print(f"Algorithm execution time: {execution_time:.4f} seconds")
+
+        return {
+            'optimal_articles': optimal_articles,
+            'kpi1_count': kpi1_count,
+            'kpi2_count': kpi2_count,
+            'kpi3_count': kpi3_count,
+            'kpi1_percentage': kpi1_percentage,
+            'kpi2_percentage': kpi2_percentage,
+            'kpi3_percentage': kpi3_percentage,
+            'used_volume': used_volume, 
+            'shipped_orders_volume': shipped_orders_volume,  # Include the new value
+            'lambda_1': lambda_1, 
+            'lambda_2': lambda_2,
+            'lambda_3': lambda_3,
+            'selected_stores': selected_stores,
+            'number_of_articles': max_articles,
+        }
+
+    else:
+        print("The problem does not have an optimal solution.")
+        return None
+
 
 ########################################
 def display_optimum_page():
@@ -306,7 +390,7 @@ def display_optimum_page():
             selected_stores = ["Store 1", "Store 2", "Store 3"]
         
         # Call the optimize_warehouse function with the selected parameters
-        results = optimize_warehouse(
+        results = optimize_warehouse_ortools_obes(
             articles=articles,
             orders=commandes,
             selected_stores=selected_stores,
@@ -318,6 +402,12 @@ def display_optimum_page():
 
         # Add the results to the list of simulations in the session state
         st.session_state.simulations.append(results)
+    
+        # Store optimal list in session for use on other pages
+        st.session_state['optimal_articles'] = [
+            {'cod_art': article['cod_art'], 'size_art': article['size_art']} 
+            for article in articles if article['cod_art'] in results['optimal_articles']
+        ]
 
     # Display all simulation results
     st.subheader("Simulation Results")
@@ -330,7 +420,8 @@ def display_optimum_page():
                 f"**{sim['kpi1_percentage']:.0f}% of total orders**")
         st.write(f"**{sim['kpi2_count']:.0f} agabaritic orders** are shipped from the LLS, approximately "
                 f"**{sim['kpi2_percentage']:.0f}% of agabaritic orders**")
-        st.write(f"**{sim['kpi3_count']:.0f} orders** have been prepared on the LLS")
+        st.write(f"**{sim['kpi3_count']:.0f} orders** have been prepared on the LLS, approximately "
+                f"**{sim['kpi3_percentage']:.0f}% of total orders**")
         st.write(f"Total volume used in the LLS: {sim['used_volume']} m3")
         st.write(f"Total volume shipped from the LLS: {sim['shipped_orders_volume']} m3")
 
@@ -338,40 +429,48 @@ def display_optimum_page():
         optimal_articles = sim['optimal_articles']
         kpi1_percentage = []
         kpi2_percentage = []
-        kpi3_count = []
-        kpi2_count = []
+        kpi3_percentage = []
+        objective_value = []
         selected_articles = []
         for article in optimal_articles:
             selected_articles.append(article)
-            results = calculate_kpis(selected_articles, articles, commandes, selected_stores=sim['selected_stores'])
+            results = calculate_kpis_obes(selected_articles, 
+                                          articles, 
+                                          commandes, 
+                                          selected_stores=sim['selected_stores'], 
+                                          lambda_1=sim['lambda_1'], 
+                                          lambda_2=sim['lambda_2'], 
+                                          lambda_3=sim['lambda_3'])
             kpi1_percentage.append(results['kpi1_percentage'])
             kpi2_percentage.append(results['kpi2_percentage'])
-            kpi2_count.append(results['kpi2_count'])
-            kpi3_count.append(results['kpi3_count'])
+            kpi3_percentage.append(results['kpi3_percentage'])
+            objective_value.append(results['objective_value'])
+            print(objective_value)
 
         cumulative_articles = list(range(1, len(optimal_articles) + 1))
 
         plt.figure(figsize=(10, 6))
 
-        # Tracer KPI 1 et KPI 2 sur l'axe de gauche
+        # Tracer KPI 1, KPI 2, KPI 3 sur l'axe de gauche
         line1, = plt.plot(cumulative_articles, kpi1_percentage, marker='o', linestyle='-', color='b', label='KPI 1')
-        line2, = plt.plot(cumulative_articles, kpi2_percentage, marker='x', linestyle='-', color='g', label='KPI 2')
-        plt.xlabel("Number of stored articles")
-        plt.ylabel("KPI 1 (%) / KPI 2 (%)")
+        line2, = plt.plot(cumulative_articles, kpi2_percentage, marker='o', linestyle='-', color='g', label='KPI 2')
+        line3, = plt.plot(cumulative_articles, kpi3_percentage, marker='o', linestyle='-', color='r', label='KPI 3')
+        plt.xlabel("Value of objective function")
+        plt.ylabel("KPI 1, KPI 2, KPI 3 (%)")
 
-        # Tracer KPI 3 sur l'axe de droite
+        # Tracer la fonction objective sur l'axe de droite
         ax2 = plt.gca().twinx()
-        line3, = ax2.plot(cumulative_articles, kpi3_count, marker='s', linestyle='--', color='r', label='KPI 3')
-        ax2.set_ylabel("KPI 3 (Count)")
+        line4, = ax2.plot(cumulative_articles, objective_value, marker='s', linestyle='--', color='y', label='Objective')
+        ax2.set_ylabel("Objective function") 
 
         plt.title("Evolution of KPIs based on the number of stored articles")
         plt.grid(True)
 
-        # Définir les limites de l'axe y pour correspondre aux données combinées de KPI 1 et KPI 2
-        plt.ylim(min(min(kpi1_percentage), min(kpi2_percentage)) - 5, max(max(kpi1_percentage), max(kpi2_percentage)) + 5)
+        # Définir les limites de l'axe y pour correspondre aux données combinées de KPI 1, KPI 2, KPI 3
+        plt.ylim(min(min(kpi1_percentage), min(kpi2_percentage), min(kpi3_percentage)) - 5, max(max(kpi1_percentage), max(kpi2_percentage), max(kpi3_percentage)) + 5)
 
         # Combiner les lignes et les étiquettes des deux axes pour une seule légende
-        lines = [line1, line2, line3]
+        lines = [line1, line2, line3, line4]
         labels = [line.get_label() for line in lines]
         plt.legend(lines, labels, loc='upper left')
 

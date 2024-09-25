@@ -9,13 +9,14 @@ st.set_page_config(page_title="LLS - Assortment, KPI values", layout="centered")
 from articles_page import display_articles_page
 from orders_page import display_orders_page
 from optimum_page import display_optimum_page
+from lls_assortment_page import display_lls_assortment_page
 
 # Définir les options de la barre latérale
 with st.sidebar:
     page = option_menu(
     menu_title = "Menu",
-    options = ["Home", "Find the optimum assortment", "Articles visualization", "Orders visualization"],
-    icons = ["house","activity","list-ul","basket-fill"],
+    options = ["Home", "Find the optimum assortment", "LLS assortment visualization", "Articles visualization", "Orders visualization"],
+    icons = ["house","activity","list-ul","basket-fill", "basket-fill"], 
     menu_icon = "cast",
     default_index = 0,
     #orientation = "horizontal",
@@ -55,6 +56,9 @@ if page == "Home":
 
 if page == "Find the optimum assortment":
     display_optimum_page()
+
+if page == "LLS assortment visualization":
+    display_lls_assortment_page() 
 
 elif page == "Articles visualization":
     display_articles_page()
